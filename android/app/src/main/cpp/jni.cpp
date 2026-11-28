@@ -4,6 +4,7 @@
 #include <android/asset_manager_jni.h>
 #include <jni.h>
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -325,4 +326,189 @@ extern "C" JNIEXPORT jfloat JNICALL Java_com_shunti_japaneseime_Engine_nativeAiL
     auto* h = reinterpret_cast<Handle*>(p);
     if (!h) return -1;
     return kkc_ai::learn(h->ai, h->e, jstr16(env, ctx), jstr16(env, reading), jstr16(env, text));
+}
+
+// ---- rext_* (小物ロジック。Rust 版 rext-kkc が kkc_* と一緒に輸出する 25 本。rust/crates/rext-kkc/REXT_EXPORTS.md) ----
+// Engine 用の上のブリッジとは別に、NumberFormatter / Brackets / Pos / DateTimePredictor の各 object から呼ぶ。
+// ヘッダは無いのでここで宣言する。戻り値の char* は呼び出し側の所有で、rext_free_string でちょうど 1 回解放する。
+// weak で宣言するのが肝心: Rust 版ライブラリがまだリンクされていないビルド (従来の C++ engine.cpp だけの構成)
+// でも libkkc.so 自体は読み込めて、シンボルが無いブリッジは null / 空配列 / -1 を返し、Kotlin 側の純実装
+// フォールバックに落ちる。Rust 版がリンクされれば (kkc_* 52 本 + rext_* 25 本を出す librext_kkc) 実物が呼ばれる。
+extern "C" {
+__attribute__((weak)) void rext_free_string(char* p);
+__attribute__((weak)) char* rext_number_add_commas(const char* s);
+__attribute__((weak)) char* rext_number_to_kanji(const char* s);
+__attribute__((weak)) char* rext_number_to_man_mixed(const char* s);
+__attribute__((weak)) char* rext_number_era_year(int64_t year);
+__attribute__((weak)) char* rext_number_forms(const char* s);
+__attribute__((weak)) char* rext_number_predict(const char* s);
+__attribute__((weak)) char* rext_datetime_predict_with_offset(const char* s, int64_t now_unix, int64_t offset_seconds);
+__attribute__((weak)) char* rext_bracket_closing_for(const char* s);
+__attribute__((weak)) char* rext_bracket_opening_for(const char* s);
+__attribute__((weak)) char* rext_bracket_auto_close(const char* s);
+__attribute__((weak)) char* rext_bracket_variants(const char* s);
+__attribute__((weak)) char* rext_bracket_opens();
+__attribute__((weak)) char* rext_bracket_closes();
+__attribute__((weak)) int32_t rext_pos_class_count();
+__attribute__((weak)) uint32_t rext_pos_class(int32_t lid);
+__attribute__((weak)) uint32_t rext_pos_group(int32_t lid);
+}  // extern "C"
+
+namespace {
+// jstring (UTF-16) を UTF-8 に直す。GetStringUTFChars の変形 UTF-8 はサロゲートペアを化けさせるので使わない
+std::string rext_utf8_arg(JNIEnv* env, jstring s) {
+    if (!s) return std::string();
+    const jchar* c = env->GetStringChars(s, nullptr);
+    const jsize n = env->GetStringLength(s);
+    std::string out;
+    for (jsize i = 0; i < n; i++) {
+        uint32_t cp = c[i];
+        if (cp >= 0xD800 && cp <= 0xDBFF && i + 1 < n && c[i + 1] >= 0xDC00 && c[i + 1] <= 0xDFFF) {
+            cp = 0x10000 + ((cp - 0xD800) << 10) + (uint32_t(c[i + 1]) - 0xDC00);
+            i++;
+        }
+        if (cp < 0x80) {
+            out.push_back(char(cp));
+        } else if (cp < 0x800) {
+            out.push_back(char(0xC0 | (cp >> 6)));
+            out.push_back(char(0x80 | (cp & 0x3F)));
+        } else if (cp < 0x10000) {
+            out.push_back(char(0xE0 | (cp >> 12)));
+            out.push_back(char(0x80 | ((cp >> 6) & 0x3F)));
+            out.push_back(char(0x80 | (cp & 0x3F)));
+        } else {
+            out.push_back(char(0xF0 | (cp >> 18)));
+            out.push_back(char(0x80 | ((cp >> 12) & 0x3F)));
+            out.push_back(char(0x80 | ((cp >> 6) & 0x3F)));
+            out.push_back(char(0x80 | (cp & 0x3F)));
+        }
+    }
+    env->ReleaseStringChars(s, c);
+    return out;
+}
+
+// rext_* の戻り (所有権はこちら) を jstring にして解放する。NULL はそのまま null
+// (出力は数字・かな・漢字・括弧など BMP の字だけなので NewStringUTF の変形 UTF-8 でも化けない)
+jstring rext_jstring(JNIEnv* env, char* out) {
+    if (!out) return nullptr;
+    jstring s = env->NewStringUTF(out);
+    if (rext_free_string) rext_free_string(out);
+    return s;
+}
+
+// rext_* の候補リスト ('\n' 区切り) を文字列の配列にして解放する。NULL・空は空配列
+jobjectArray rext_jarray(JNIEnv* env, char* out) {
+    jclass str = env->FindClass("java/lang/String");
+    std::vector<std::string> items;
+    if (out && out[0]) {
+        std::string cur;
+        for (const char* p = out; ; p++) {
+            if (*p == '\n' || *p == '\0') {
+                items.push_back(cur);
+                cur.clear();
+                if (*p == '\0') break;
+            } else {
+                cur.push_back(*p);
+            }
+        }
+    }
+    if (rext_free_string) rext_free_string(out);
+    jobjectArray arr = env->NewObjectArray(jsize(items.size()), str, nullptr);
+    for (size_t i = 0; i < items.size(); i++) {
+        jstring s = env->NewStringUTF(items[i].c_str());
+        env->SetObjectArrayElement(arr, jsize(i), s);
+        env->DeleteLocalRef(s);
+    }
+    return arr;
+}
+
+using RextStrFn = char* (*)(const char*);
+
+// 文字列 1 引数 -> 文字列 1 値 (結果が無ければ rext_* が NULL を返すので null)
+jstring rext_call_str(JNIEnv* env, RextStrFn fn, jstring s) {
+    if (!fn) return nullptr;
+    const std::string u = rext_utf8_arg(env, s);
+    return rext_jstring(env, fn(u.c_str()));
+}
+
+// 文字列 1 引数 -> 候補リストの配列 (リンクが無ければ空配列)
+jobjectArray rext_call_list(JNIEnv* env, RextStrFn fn, jstring s) {
+    if (!fn) return rext_jarray(env, nullptr);
+    const std::string u = rext_utf8_arg(env, s);
+    return rext_jarray(env, fn(u.c_str()));
+}
+}  // namespace
+
+// ---- NumberFormatter (object の external fun なので第 2 引数は jobject) ----
+extern "C" JNIEXPORT jstring JNICALL Java_com_shunti_japaneseime_NumberFormatter_nativeNumberAddCommas(JNIEnv* env, jobject, jstring s) {
+    return rext_call_str(env, rext_number_add_commas, s);
+}
+
+extern "C" JNIEXPORT jstring JNICALL Java_com_shunti_japaneseime_NumberFormatter_nativeNumberToKanji(JNIEnv* env, jobject, jstring s) {
+    return rext_call_str(env, rext_number_to_kanji, s);
+}
+
+extern "C" JNIEXPORT jstring JNICALL Java_com_shunti_japaneseime_NumberFormatter_nativeNumberToManMixed(JNIEnv* env, jobject, jstring s) {
+    return rext_call_str(env, rext_number_to_man_mixed, s);
+}
+
+extern "C" JNIEXPORT jstring JNICALL Java_com_shunti_japaneseime_NumberFormatter_nativeNumberEraYear(JNIEnv* env, jobject, jlong year) {
+    if (!rext_number_era_year) return nullptr;
+    return rext_jstring(env, rext_number_era_year(int64_t(year)));
+}
+
+extern "C" JNIEXPORT jobjectArray JNICALL Java_com_shunti_japaneseime_NumberFormatter_nativeNumberForms(JNIEnv* env, jobject, jstring s) {
+    return rext_call_list(env, rext_number_forms, s);
+}
+
+extern "C" JNIEXPORT jobjectArray JNICALL Java_com_shunti_japaneseime_NumberFormatter_nativeNumberPredict(JNIEnv* env, jobject, jstring s) {
+    return rext_call_list(env, rext_number_predict, s);
+}
+
+// ---- DateTimePredictor ----
+extern "C" JNIEXPORT jobjectArray JNICALL Java_com_shunti_japaneseime_DateTimePredictor_nativeDatetimePredict(JNIEnv* env, jobject, jstring reading,
+                                                                                                            jlong now_unix, jlong offset_seconds) {
+    if (!rext_datetime_predict_with_offset) return rext_jarray(env, nullptr);
+    const std::string u = rext_utf8_arg(env, reading);
+    return rext_jarray(env, rext_datetime_predict_with_offset(u.c_str(), int64_t(now_unix), int64_t(offset_seconds)));
+}
+
+// ---- Brackets ----
+extern "C" JNIEXPORT jstring JNICALL Java_com_shunti_japaneseime_Brackets_nativeBracketClosingFor(JNIEnv* env, jobject, jstring s) {
+    return rext_call_str(env, rext_bracket_closing_for, s);
+}
+
+extern "C" JNIEXPORT jstring JNICALL Java_com_shunti_japaneseime_Brackets_nativeBracketOpeningFor(JNIEnv* env, jobject, jstring s) {
+    return rext_call_str(env, rext_bracket_opening_for, s);
+}
+
+extern "C" JNIEXPORT jstring JNICALL Java_com_shunti_japaneseime_Brackets_nativeBracketAutoClose(JNIEnv* env, jobject, jstring s) {
+    return rext_call_str(env, rext_bracket_auto_close, s);
+}
+
+extern "C" JNIEXPORT jobjectArray JNICALL Java_com_shunti_japaneseime_Brackets_nativeBracketVariants(JNIEnv* env, jobject, jstring s) {
+    return rext_call_list(env, rext_bracket_variants, s);
+}
+
+extern "C" JNIEXPORT jobjectArray JNICALL Java_com_shunti_japaneseime_Brackets_nativeBracketOpens(JNIEnv* env, jobject) {
+    if (!rext_bracket_opens) return rext_jarray(env, nullptr);
+    return rext_jarray(env, rext_bracket_opens());
+}
+
+extern "C" JNIEXPORT jobjectArray JNICALL Java_com_shunti_japaneseime_Brackets_nativeBracketCloses(JNIEnv* env, jobject) {
+    if (!rext_bracket_closes) return rext_jarray(env, nullptr);
+    return rext_jarray(env, rext_bracket_closes());
+}
+
+// ---- Pos (コードポイントで返す。リンクが無ければ -1、品詞が不明なら rext_* の 0) ----
+extern "C" JNIEXPORT jint JNICALL Java_com_shunti_japaneseime_Pos_nativePosClassCount(JNIEnv*, jobject) {
+    return rext_pos_class_count ? jint(rext_pos_class_count()) : -1;
+}
+
+extern "C" JNIEXPORT jint JNICALL Java_com_shunti_japaneseime_Pos_nativePosClass(JNIEnv*, jobject, jint lid) {
+    return rext_pos_class ? jint(rext_pos_class(int32_t(lid))) : -1;
+}
+
+extern "C" JNIEXPORT jint JNICALL Java_com_shunti_japaneseime_Pos_nativePosGroup(JNIEnv*, jobject, jint lid) {
+    return rext_pos_group ? jint(rext_pos_group(int32_t(lid))) : -1;
 }

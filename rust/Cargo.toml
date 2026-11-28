@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = ["crates/rext-core", "crates/rext-kkc"]
+
+[workspace.package]
+edition = "2021"
+license = "BSD-2-Clause"
+version = "0.1.0"
+
+[profile.release]
+lto = true

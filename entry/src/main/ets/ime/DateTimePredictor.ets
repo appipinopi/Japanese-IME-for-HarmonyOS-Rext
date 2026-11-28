@@ -11,6 +11,15 @@
 // learning (see isNonLearningCandidate in KeyboardController).
 //
 // PC 版 (desktop/core/datetime.cpp) も同じ決まり (両方同じ中身にする)。
+//
+// 第3弾 (Rust 化): predict はまず Rust 版 rext-kkc の
+// rext_datetime_predict_with_offset を libkkc.so 経由で呼ぶ。now は UNIX 秒に
+// 直し、オフセットは端末のタイムゾーン (Date.getTimezoneOffset) から渡すので、
+// rext 側の UTC+9 固定版ではなく端末の現地時刻で数える。候補は '\n' 区切りで
+// 返るのでここで string[] に直す。ネイティブが読み込めない・例外・空のときは
+// 下の純実装 (predictPure) に落ちる。現行のこのファイルの dateForms (12 形) が
+// 正で、rext 側も同じ 12 形を返す前提 (コーディネータ確認済み)。
+import kkc from 'libkkc.so';
 
 interface NumberPiece {
   k: string;
@@ -385,6 +394,18 @@ export class DateTimePredictor {
   // Live date/time candidates for `reading` as of `now`, or [] if the reading
   // isn't a date/time trigger.
   static predict(reading: string, now: Date): string[] {
+    try {
+      const raw = kkc.rextDatetimePredictWithOffset(
+        reading, Math.floor(now.getTime() / 1000), -now.getTimezoneOffset() * 60);
+      if (raw.length > 0) { return raw.split('\n'); }
+      // 空は「日付・時刻の読みでない」か「リンクなし」。純実装でも同じ判定になる
+    } catch (e) {
+      // libkkc.so が読めない環境では純実装に落ちる
+    }
+    return DateTimePredictor.predictPure(reading, now);
+  }
+
+  private static predictPure(reading: string, now: Date): string[] {
     // 数字 8 桁の日付 (20261018 → 2026年10月18日(日) など)。ありえない日付は出さない (PC 版と同じ)
     const digits = reading.replace(/[０-９]/g, (c: string) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
     if (/^\d{8}$/.test(digits)) {

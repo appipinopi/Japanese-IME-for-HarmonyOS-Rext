@@ -75,3 +75,57 @@ export const glideRerankAsync: (ctx: string, prefix: string, readings: string[],
 export const glidePrepareAsync: (mode: number) => Promise<number>;
 /** なぞりの語の一覧 (キー TAB 表記|表記 TAB コスト) を rawfile から読む。mode 2 = 中国語の拼音。行の数 */
 export const glideLoadWordsAsync: (resMgr: object, mode: number, name: string) => Promise<number>;
+
+/** ---- rext_* (小物ロジック。Rust 版 rext-kkc の輸出。rust/crates/rext-kkc/REXT_EXPORTS.md) ----
+ * 単一値の関数は、結果が無い場合 (数字でない・未知の括弧・和暦の範囲外) と、Rust 版ライブラリが
+ * リンクされていないビルドでは、どちらも空文字列を返す。呼び出し側は空なら純実装に落とすこと。
+ * 候補リストの関数は候補を '\n' でつないだ 1 本の文字列を返すので、使う側で split('\n') して
+ * string[] に直す (候補が無ければ空文字列)。 */
+/** ローマ字 -> かな (無状態の一括変換。"neko" -> "ねこ") */
+export const rextRomajiToKana: (s: string) => string;
+/** かな -> ローマ字 ("とうきょう" -> "toukyou") */
+export const rextKanaToRomaji: (s: string) => string;
+/** ひらがな -> カタカナ */
+export const rextToKatakana: (s: string) => string;
+/** カタカナ -> ひらがな */
+export const rextToHiragana: (s: string) => string;
+/** かな -> 半角カナ */
+export const rextToHalfwidthKana: (s: string) => string;
+/** 半角 ASCII -> 全角 ASCII */
+export const rextToFullwidthAscii: (s: string) => string;
+/** 全角 ASCII -> 半角 ASCII */
+export const rextToHalfwidthAscii: (s: string) => string;
+/** 数字に桁区切り (全角数字も可。数字でなければ空) */
+export const rextNumberAddCommas: (s: string) => string;
+/** 数字 -> 漢数字 (数字でなければ空) */
+export const rextNumberToKanji: (s: string) => string;
+/** 数字 -> 万の混ぜ書き ("12345678" -> "1234万5678"。数字でなければ空) */
+export const rextNumberToManMixed: (s: string) => string;
+/** 西暦の年 -> 和暦の年 (2026 -> "令和8年"。1926 年より前は空) */
+export const rextNumberEraYear: (year: number) => string;
+/** 数字の書き換え候補の一覧 ('\n' 区切り。和暦・桁区切り・万混ぜ・漢数字・丸数字) */
+export const rextNumberForms: (s: string) => string;
+/** 数字だけの読みの候補の一覧 ('\n' 区切り。桁区切り・万混ぜ・漢数字。4 桁以上のみ) */
+export const rextNumberPredict: (s: string) => string;
+/** 日付・時刻の候補の一覧 ('\n' 区切り)。nowUnix = UNIX 秒、ローカル時刻は UTC+9 固定で数える */
+export const rextDatetimePredict: (reading: string, nowUnix: number) => string;
+/** 日付・時刻の候補の一覧 ('\n' 区切り)。offsetSeconds = UTC からのずれ (秒。JST なら 32400) */
+export const rextDatetimePredictWithOffset: (reading: string, nowUnix: number, offsetSeconds: number) => string;
+/** 開き括弧 -> 閉じ括弧 (括弧でなければ空) */
+export const rextBracketClosingFor: (s: string) => string;
+/** 閉じ括弧 -> 開き括弧 (括弧でなければ空) */
+export const rextBracketOpeningFor: (s: string) => string;
+/** 開き括弧 -> 自動で閉じる閉じ括弧 (＜ < ‘ と未知の字は空) */
+export const rextBracketAutoClose: (s: string) => string;
+/** 読みに合う括弧・記号の候補の一覧 ('\n' 区切り) */
+export const rextBracketVariants: (reading: string) => string;
+/** 開き括弧の全種類の一覧 ('\n' 区切り、24 件) */
+export const rextBracketOpens: () => string;
+/** 閉じ括弧の全種類の一覧 ('\n' 区切り、24 件) */
+export const rextBracketCloses: () => string;
+/** 品詞 ID の総数 (2672。リンクされていないビルドでは 0) */
+export const rextPosClassCount: () => number;
+/** 品詞の分類 1 字 ('0'..'4')。範囲外は '0'、リンクされていないビルドでは空 */
+export const rextPosClass: (lid: number) => string;
+/** 品詞の仲間 1 字 ('N' 'V' 'P' …)。不明とリンクされていないビルドでは空 */
+export const rextPosGroup: (lid: number) => string;

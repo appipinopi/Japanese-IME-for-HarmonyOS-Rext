@@ -6,8 +6,21 @@ import java.util.Calendar
  * 日付・時刻の候補 (HarmonyOS 版 ime/DateTimePredictor.ets の移植)。
  * きょう → 今日の日付、いま → 今の時刻、あした → 明日の日付、ことし → 今年 (和暦つき)。
  * 今の時刻は引数で受け取る (中で時計を読まない) ので、結果は引数だけで決まる。
+ *
+ * 第3弾 (Rust 化): predict はまず Rust 版 rext-kkc の
+ * rext_datetime_predict_with_offset を JNI 経由で呼ぶ。now は UNIX 秒に直し、
+ * オフセットは now のタイムゾーンから渡す。ネイティブが読めない・例外・空の
+ * ときは下の純実装 (predictPure) に落ちる。注意: rext 側は HarmonyOS 版
+ * (12 形・曜日つき・<数>がつ<数>にち 等) の移植なので、このファイルの従来の
+ * 純実装より候補の種類が多い。ネイティブが有効な環境では候補が増える。
  */
 object DateTimePredictor {
+    init {
+        runCatching { System.loadLibrary("kkc") }
+    }
+
+    private external fun nativeDatetimePredict(reading: String, nowUnix: Long, offsetSeconds: Long): Array<String>
+
     private val DOW = listOf("日", "月", "火", "水", "木", "金", "土")
 
     private val DAY_OFFSETS = mapOf(
@@ -57,6 +70,15 @@ object DateTimePredictor {
 
     /** reading の日付・時刻の候補 (now の時点で)。日付・時刻の読みでなければ空 */
     fun predict(reading: String, now: Calendar): List<String> {
+        runCatching {
+            nativeDatetimePredict(reading, now.timeInMillis / 1000, now.timeZone.getOffset(now.timeInMillis) / 1000L)
+        }.getOrNull()?.let {
+            if (it.isNotEmpty()) return it.toList()
+        }
+        return predictPure(reading, now)
+    }
+
+    private fun predictPure(reading: String, now: Calendar): List<String> {
         DAY_OFFSETS[reading]?.let { off ->
             val d = Calendar.getInstance().apply {
                 clear()
