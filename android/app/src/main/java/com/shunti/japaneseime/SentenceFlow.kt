@@ -7,6 +7,12 @@ import java.io.File
  * 文の流れの予測 (HarmonyOS 版 SentenceFlow と同じ。ユーザー 2026-10-13: 「お疲れ様です」を出したら「。」、続けて「本日の進捗報告です。」)。
  * 入力欄に出た文字を句読点・改行・送信で区切った節の並びとして覚え、節 -> 句読点・節 -> 次の節 の流れのうち 2 回以上あったものを、
  * 確定の後の帯に出す。端末の中 (filesDir/flow.json) だけに保存する。
+ *
+ * 第3弾 (Rust 化) ではこのファイルは置き換えていない: SentenceFlow は状態あり
+ * (節のバッファ・学習表・filesDir への保存) で、rext_* には状態あり関数の輸出が
+ * 無い (rust/crates/rext-kkc/REXT_EXPORTS.md の未対応節)。feed/close/predict の
+ * 純ロジック部分もすべて内部状態に依存して切り出せないため、全体を純実装のまま
+ * 残す。詳細は rust/phase3/D-bridges.md。
  */
 object SentenceFlow {
     private const val BOUNDARY = "。．！？!?、，\n"

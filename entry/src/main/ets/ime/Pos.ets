@@ -1,5 +1,11 @@
 // 品詞の表 (desktop/core/pos_classes.h の POS_CLASSES・POS_GROUPS、辞書の左 ID ごとに 1 字。エンジンから 1 回だけ読む)。
 // 品詞ごとの学習 (PC 版・Android と同じ。2026-11-09) で使う。品詞が分からない (-1) ときは表を読まない
+//
+// 第3弾 (Rust 化): cls / group はまず Rust 版 rext-kkc の rext_pos_class /
+// rext_pos_group を呼ぶ (同じ生成表が元)。ネイティブが読み込めない・例外・
+// 空のときは、従来どおり posTables() の表を引く純実装に落ちる。
+// words / headLid は rext_* に輸出が無い (入力が構造体配列で文字列規約に
+// 乗らない。REXT_EXPORTS.md の未対応節) ので純実装のまま。
 import kkc from 'libkkc.so';
 
 // 文の中の語 (読み・表記・品詞の左 ID)
@@ -28,6 +34,12 @@ export class Pos {
   // 文節の分類: 1 付属語・2 接頭・3 サ変接続の名詞・4 サ変・スルの動詞・0 自立語
   static cls(lid: number): string {
     if (lid < 0) { return '0'; }
+    try {
+      const c = kkc.rextPosClass(lid);
+      if (c.length > 0) { return c; }
+    } catch (e) {
+      // 純実装に落ちる
+    }
     const t = Pos.table(0);
     return lid < t.length ? t.charAt(lid) : '0';
   }
@@ -35,6 +47,14 @@ export class Pos {
   // 学習を分ける粗い品詞 (N 名詞・V 動詞・P 助詞・X 助動詞 …。PC 版 group_of_lid)。分からなければ NO_GROUP
   static group(lid: number): string {
     if (lid < 0) { return Pos.NO_GROUP; }
+    try {
+      const g = kkc.rextPosGroup(lid);
+      if (g.length > 0) { return g; }
+      // 空は「仲間が不明」と「リンクなし」の両方でありうる。表 (同じ生成表が元)
+      // で確かめ直しても結果は変わらないので、そのまま下の純実装へ
+    } catch (e) {
+      // 純実装に落ちる
+    }
     const t = Pos.table(1);
     return lid < t.length ? t.charAt(lid) : Pos.NO_GROUP;
   }

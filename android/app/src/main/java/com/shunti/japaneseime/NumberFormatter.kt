@@ -4,8 +4,28 @@ package com.shunti.japaneseime
  * 数字の書き換え (HarmonyOS 版 ime/NumberFormatter.ets の移植。関数名と中身は向こうと同じ)。
  * 読みが数字だけのとき、桁区切り (1,000,000)・万の混ぜ書き (100万)・漢数字 (百万) を候補に足す。
  * 文字列のまま扱うので、大きい数でも桁が落ちない。
+ *
+ * 第3弾 (Rust 化): predict はまず Rust 版 rext-kkc の rext_number_predict を
+ * JNI (jni.cpp の NumberFormatter ブリッジ) 経由で呼ぶ。ネイティブが読めない・
+ * 例外・空のときは下の純実装 (predictPure) に落ちる。rext 側の predict はこの
+ * 純実装と同じ決まりなので、どちらを通っても候補は同じになる。
  */
 object NumberFormatter {
+    init {
+        // Engine を経由せず単体で使われても JNI が引けるように (読めなければ純実装に落ちるだけ)
+        runCatching { System.loadLibrary("kkc") }
+    }
+
+    private external fun nativeNumberPredict(composing: String): Array<String>
+
+    // JNI ブリッジの残り (rext_number_* の単一値・一覧版。数字でなければ null / 空)。
+    // predict 本体は nativeNumberPredict だけを使うが、ブリッジの対として宣言しておく
+    private external fun nativeNumberAddCommas(s: String): String?
+    private external fun nativeNumberToKanji(s: String): String?
+    private external fun nativeNumberToManMixed(s: String): String?
+    private external fun nativeNumberEraYear(year: Long): String?
+    private external fun nativeNumberForms(s: String): Array<String>
+
     private val DIGIT_KANJI = listOf("〇", "一", "二", "三", "四", "五", "六", "七", "八", "九")
     private val SMALL_UNITS = listOf("", "十", "百", "千")      // 4 桁の組の中の位
     private val BIG_UNITS = listOf("", "万", "億", "兆", "京")   // 4 桁の組ごと
@@ -89,6 +109,15 @@ object NumberFormatter {
 
     /** 数字だけの読みの書き換えの候補。数字でない・短すぎる・長すぎる・0 で始まる (番号らしい) なら空 */
     fun predict(composing: String): List<String> {
+        // Rust 版 (rext_number_predict) を先に試す。空は「候補なし」か「リンクなし」で、
+        // どちらも純実装で確かめ直せば結果は同じになる
+        runCatching { nativeNumberPredict(composing) }.getOrNull()?.let {
+            if (it.isNotEmpty()) return it.toList()
+        }
+        return predictPure(composing)
+    }
+
+    private fun predictPure(composing: String): List<String> {
         val digits = normalizeDigits(composing) ?: return emptyList()
         if (digits.length < 4 || digits.length > MAX_DIGITS) return emptyList()
         if (digits[0] == '0') return emptyList()

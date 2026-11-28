@@ -6,6 +6,13 @@
 //
 // String-based throughout (no Number parsing) so arbitrarily large values keep
 // full precision. Pure function of the digit string — unit-testable, no state.
+//
+// 第3弾 (Rust 化): predict はまず Rust 版 rext-kkc の rext_number_predict を
+// libkkc.so 経由で呼ぶ (候補は '\n' 区切りで返るのでここで string[] に直す)。
+// ネイティブが読み込めない・例外・空のときは、下の純実装 (predictPure) に落ちる。
+// rext 側の predict はこの純実装と同じ決まり (4 桁以上・0 始まりは空・桁区切り/
+// 万混ぜ/漢数字の順) なので、どちらを通っても候補は同じになる。
+import kkc from 'libkkc.so';
 
 const DIGIT_KANJI: string[] = ['〇', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
 const SMALL_UNITS: string[] = ['', '十', '百', '千'];      // positions within a 4-digit group
@@ -100,10 +107,23 @@ export class NumberFormatter {
     return out;
   }
 
+  static predict(composing: string): string[] {
+    // Rust 版 (rext_number_predict) を先に試す。空が返るのは「候補なし」か
+    // 「Rust 版がリンクされていないビルド」で、どちらの場合も純実装の結果と
+    // 食い違わない (候補がある入力では必ず非空が返る) ので、そのまま純実装へ。
+    try {
+      const raw = kkc.rextNumberPredict(composing);
+      if (raw.length > 0) { return raw.split('\n'); }
+    } catch (e) {
+      // libkkc.so が読めない環境 (単体テスト等) では純実装に落ちる
+    }
+    return NumberFormatter.predictPure(composing);
+  }
+
   // Formatted alternatives for a bare-digit composing string, or [] if it isn't
   // one / is too long / has a leading zero (likely an id, phone, zip — not a
   // quantity). candidate[0] stays the digits themselves; these follow.
-  static predict(composing: string): string[] {
+  private static predictPure(composing: string): string[] {
     const digits = NumberFormatter.normalizeDigits(composing);
     if (digits === null) { return []; }
     if (digits.length < 4 || digits.length > MAX_DIGITS) { return []; }
